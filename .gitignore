@@ -1,33 +1,30 @@
+# Virtual environment
+.venv/
+venv/
+
 # Python
 __pycache__/
-*.py[cod]
-*.pyd
+*.pyc
 *.pyo
-*.pdb
+*.pyd
+*.log
 *.egg-info/
 dist/
 build/
-
-# Virtual env
-.venv/
-venv/
 
 # IDE
 .idea/
 .vscode/
 
-# OS
-.DS_Store
-Thumbs.db
-
-# Data & artifacts
+# Data
 data/raw/
 data/masked/
 data/features/
-models/
-mlruns/
-*.log
 
-# Environment / secrets
+# Artifacts
+mlruns/
+models/
+
+# Secrets
 .env
 .env.*
