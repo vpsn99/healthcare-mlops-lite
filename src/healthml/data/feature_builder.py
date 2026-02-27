@@ -12,29 +12,37 @@ def _to_dt(s: pd.Series) -> pd.Series:
 
 def build_readmit_label(encounters: pd.DataFrame) -> pd.DataFrame:
     """
-    Label = 1 if patient has a next encounter START within 30 days of current encounter STOP.
-    We create a patient-level label: if ANY readmission happens -> 1 else 0.
+    Patient-level label: 1 if ANY qualifying inpatient stay is followed by another qualifying inpatient stay
+    within 30 days of discharge.
+
+    Qualifying inpatient stay filters reduce synthetic "chaining" artifacts:
+      - ENCOUNTERCLASS == inpatient
+      - length of stay >= 1 day
+      - gap between discharge and next admission >= 1 day
     """
     enc = encounters.copy()
+
+    # Require ENCOUNTERCLASS if present
+    if "ENCOUNTERCLASS" in enc.columns:
+        enc["ENCOUNTERCLASS"] = enc["ENCOUNTERCLASS"].astype(str).str.lower()
+        enc = enc[enc["ENCOUNTERCLASS"] == "inpatient"].copy()
+
     enc["START"] = _to_dt(enc.get("START"))
     enc["STOP"] = _to_dt(enc.get("STOP"))
-
-    # Keep only rows where dates exist
     enc = enc.dropna(subset=["patient_token", "START", "STOP"])
 
-    # Sort within patient by START
-    enc = enc.sort_values(["patient_token", "START"])
+    # Length of stay (days)
+    enc["los_days"] = (enc["STOP"] - enc["START"]).dt.total_seconds() / 86400.0
+    enc = enc[enc["los_days"] >= 2.0].copy()
 
-    # Next admission start per patient
+    enc = enc.sort_values(["patient_token", "START"])
     enc["NEXT_START"] = enc.groupby("patient_token")["START"].shift(-1)
 
-    # Gap in days between discharge and next admission
     enc["gap_days"] = (enc["NEXT_START"] - enc["STOP"]).dt.total_seconds() / 86400.0
 
-    # Readmit if next start within 0..30 days (and gap not null)
-    enc["readmit_30d_event"] = enc["gap_days"].between(0, 30, inclusive="both")
+    # within 30 days AND not same-day/next-minute
+    enc["readmit_30d_event"] = enc["gap_days"].between(2, 30, inclusive="both")
 
-    # Patient-level label: any event
     labels = (
         enc.groupby("patient_token")["readmit_30d_event"]
         .any()
@@ -109,6 +117,14 @@ def build_patient_features():
     df["active_span_days"] = df["active_span_days"].fillna(0.0)
     df["condition_count"] = df["condition_count"].fillna(0).astype(int)
     df["readmit_30d"] = df["readmit_30d"].fillna(0).astype(int)
+
+    vc = df["readmit_30d"].value_counts(dropna=False)
+    print("Label distribution:\n", vc)
+    if df["readmit_30d"].nunique() < 2:
+        raise ValueError(
+            "Degenerate labels: readmit_30d has only one class. "
+            "Generate more patients (e.g., -p 2000) or relax/tighten rules."
+        )
 
     out_path = f"{FEATURES_DIR}/patient_features.csv"
     df.to_csv(out_path, index=False)
