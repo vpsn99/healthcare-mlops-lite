@@ -1,0 +1,25 @@
+project:
+  name: healthcare-mlops-lite
+  random_seed: 42
+
+paths:
+  raw_dir: data/raw/v1
+  masked_dir: data/masked/v1
+  features_dir: data/features/v1
+  model_dir: models/registered
+  mlflow_dir: mlruns
+
+privacy:
+  hmac_secret_env: HEALTHML_HMAC_SECRET
+  date_shift_days_max: 365
+
+training:
+  target:
+    name: readmit_30d
+  split:
+    test_size: 0.2
+  model:
+    type: logistic_regression
+    params:
+      max_iter: 500
+      class_weight: balanced
