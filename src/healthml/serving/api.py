@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -8,8 +9,6 @@ from healthml.serving.schemas import PredictRequest, PredictResponse
 
 load_dotenv()
 
-app = FastAPI(title="Healthcare Readmission Risk API", version="1.0.0")
-
 MODEL_PATH = os.getenv("SERVE_MODEL_PATH", "models/registered/model.joblib")
 META_PATH = os.getenv("SERVE_MODEL_METADATA_PATH", "models/registered/model_metadata.json")
 THRESHOLD = float(os.getenv("PREDICTION_THRESHOLD", "0.5"))
@@ -17,10 +16,19 @@ THRESHOLD = float(os.getenv("PREDICTION_THRESHOLD", "0.5"))
 predictor: Predictor | None = None
 
 
-@app.on_event("startup")
-def _startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     global predictor
     predictor = Predictor(model_path=MODEL_PATH, metadata_path=META_PATH)
+    yield
+    predictor = None
+
+
+app = FastAPI(
+    title="Healthcare Readmission Risk API",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 
 @app.get("/health")
@@ -30,7 +38,7 @@ def health():
     return {
         "status": "ok",
         "model_path": MODEL_PATH,
-        "model_run_id": predictor.metadata.get("run_id"),
+        "mlflow_run_id": predictor.metadata.get("run_id"),
         "threshold": THRESHOLD
     }
 
@@ -40,7 +48,6 @@ def predict(req: PredictRequest):
     if predictor is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
 
-    # Convert request to dict and drop patient_token (not used as a feature)
     payload = req.model_dump()
     payload.pop("patient_token", None)
 
@@ -54,5 +61,5 @@ def predict(req: PredictRequest):
         prediction=pred,
         probability=p,
         threshold=THRESHOLD,
-        model_run_id=predictor.metadata.get("run_id")
+        mlflow_run_id=predictor.metadata.get("run_id")
     )

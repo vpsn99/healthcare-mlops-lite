@@ -29,4 +29,4 @@ class PredictResponse(BaseModel):
     prediction: int
     probability: float
     threshold: float
-    model_run_id: Optional[str] = None
+    mlflow_run_id: Optional[str] = None
