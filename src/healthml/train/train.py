@@ -1,27 +1,28 @@
 import argparse
 import json
-import os
 from pathlib import Path
 
 import joblib
+import matplotlib.pyplot as plt
 import mlflow
 import mlflow.sklearn
 import pandas as pd
 import yaml
 from dotenv import load_dotenv
-
+from mlflow.models.signature import infer_signature
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, f1_score, roc_auc_score, confusion_matrix
+from sklearn.metrics import (
+    accuracy_score,
+    average_precision_score,
+    confusion_matrix,
+    f1_score,
+    roc_auc_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
-from sklearn.metrics import average_precision_score
-
-from mlflow.models.signature import infer_signature
-
-import matplotlib.pyplot as plt
 
 
 def load_config(path: str) -> dict:
@@ -160,6 +161,8 @@ def main():
         f1 = f1_score(y_test, pred, zero_division=0)
         try:
             auc = roc_auc_score(y_test, proba)
+            ap = average_precision_score(y_test, proba)
+            mlflow.log_metric("pr_auc", ap)
         except ValueError:
             auc = float("nan")
 
@@ -191,6 +194,7 @@ def main():
         mlflow.log_metric("f1", f1)
         if auc == auc:  # not NaN
             mlflow.log_metric("roc_auc", auc)
+            mlflow.log_metric("pr_auc", ap)
 
         # Log artifacts
         mlflow.log_artifact(str(fig_path), artifact_path="evaluation")

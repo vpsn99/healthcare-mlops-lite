@@ -1,5 +1,6 @@
-import pandas as pd
 from datetime import timedelta
+
+import pandas as pd
 
 
 def generate_shift_days(patient_token: str, max_days: int = 365) -> int:

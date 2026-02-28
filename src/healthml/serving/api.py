@@ -1,6 +1,7 @@
 import os
-from fastapi import FastAPI, HTTPException
+
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
 
 from healthml.serving.predictor import Predictor
 from healthml.serving.schemas import PredictRequest, PredictResponse

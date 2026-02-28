@@ -1,9 +1,10 @@
 import os
+
 import pandas as pd
 from dotenv import load_dotenv
 
-from healthml.privacy.masking import pseudonymize_id, mask_patients
 from healthml.privacy.date_shift import shift_dates
+from healthml.privacy.masking import mask_patients, pseudonymize_id
 
 load_dotenv()
 
