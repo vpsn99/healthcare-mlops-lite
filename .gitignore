@@ -20,6 +20,7 @@ build/
 data/raw/
 data/masked/
 data/features/
+archives/
 
 # Artifacts
 mlruns/
