@@ -24,6 +24,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
+from healthml.data.partitions import latest_partition
+
 
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as f:
@@ -39,8 +41,66 @@ def ensure_dir(p: str | Path) -> Path:
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, help="Path to configs/train.yaml")
+    ap.add_argument("--as-of", default=None, help="YYYYMM features partition. Default: latest in data/features")
     return ap.parse_args()
 
+
+def safe_train_test_split(X, y, test_size: float, seed: int):
+    """
+    Robust split for rare positives.
+
+    Guarantees:
+      - If pos >= 2: at least 1 positive in train and 1 positive in test
+      - If pos < 2: raise (not enough positives)
+    """
+    if y.nunique() < 2:
+        raise ValueError("Target has only one class; cannot train.")
+
+    # Ensure Series for indexing
+    if not isinstance(y, pd.Series):
+        y = pd.Series(y)
+
+    pos_idx = y[y == 1].index
+    neg_idx = y[y == 0].index
+
+    pos = len(pos_idx)
+    neg = len(neg_idx)
+
+    if pos < 2:
+        raise ValueError(f"Not enough positive samples to split reliably. pos={pos}, neg={neg}. Need at least 2.")
+
+    # Decide how many positives go to test: at least 1, at most pos-1
+    pos_test_n = max(1, int(round(pos * test_size)))
+    pos_test_n = min(pos_test_n, pos - 1)
+
+    # Split positives deterministically
+    pos_train_idx, pos_test_idx = train_test_split(
+        pos_idx,
+        test_size=pos_test_n,
+        random_state=seed,
+        shuffle=True
+    )
+
+    # Negatives: normal split proportionally
+    neg_test_n = max(1, int(round(neg * test_size)))
+    neg_test_n = min(neg_test_n, neg - 1) if neg > 1 else 0
+
+    neg_train_idx, neg_test_idx = train_test_split(
+        neg_idx,
+        test_size=neg_test_n,
+        random_state=seed,
+        shuffle=True
+    )
+
+    train_idx = pos_train_idx.union(neg_train_idx)
+    test_idx = pos_test_idx.union(neg_test_idx)
+
+    X_train = X.loc[train_idx].copy()
+    X_test = X.loc[test_idx].copy()
+    y_train = y.loc[train_idx].copy()
+    y_test = y.loc[test_idx].copy()
+
+    return X_train, X_test, y_train, y_test
 
 def main():
     load_dotenv()
@@ -52,7 +112,8 @@ def main():
     seed = int(cfg.get("project", {}).get("random_seed", 42))
 
     paths = cfg.get("paths", {})
-    features_dir = Path(paths.get("features_dir", "data/features/v1"))
+    #Remove the line below
+    #features_dir = Path(paths.get("features_dir", "data/features/v1"))
     model_dir = ensure_dir(paths.get("model_dir", "models/registered"))
     mlflow_dir = Path(paths.get("mlflow_dir", "mlruns"))
 
@@ -63,7 +124,11 @@ def main():
     max_iter = int(model_params.get("max_iter", 500))
     class_weight = model_params.get("class_weight", "balanced")
 
-    data_path = features_dir / "patient_features.csv"
+    features_root = Path(paths.get("features_root", "data/features"))
+    chosen_as_of = args.as_of or latest_partition(str(features_root))
+    data_path = features_root / chosen_as_of / "patient_features.csv"
+    # Remove the line below
+    #data_path = features_dir / "patient_features.csv"
     if not data_path.exists():
         raise FileNotFoundError(
             f"Missing features file: {data_path}. "
@@ -100,14 +165,26 @@ def main():
     X = df[feature_cols].copy()
     y = df[target_name].astype(int)
 
-    # Split (stratify if possible)
-    stratify = y if y.nunique() == 2 else None
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
-        test_size=test_size,
-        random_state=seed,
-        stratify=stratify
-    )
+    pos = int(y.sum())
+    neg = int((y == 0).sum())
+
+    if pos < 2:
+        raise ValueError(
+            f"Not enough positive samples to train for as_of={chosen_as_of}. "
+            f"pos={pos}, neg={neg}. Need at least 2 positives."
+        )
+
+    X_train, X_test, y_train, y_test = safe_train_test_split(X, y, test_size=test_size, seed=seed)
+
+    print("Split counts:")
+    print("  y_train:", y_train.value_counts().to_dict())
+    print("  y_test :", y_test.value_counts().to_dict())
+
+    if y_train.nunique() < 2:
+        raise ValueError(
+            f"Train split has only one class. Try increasing data size or adjusting split/test_size. "
+            f"y_train distribution: {y_train.value_counts().to_dict()}"
+        )
 
     # Preprocessing
     numeric_pipe = Pipeline(steps=[
@@ -143,7 +220,7 @@ def main():
     mlflow.set_tracking_uri(f"file:{mlflow_dir.as_posix()}")
     mlflow.set_experiment(project_name)
 
-    with mlflow.start_run(run_name="logreg_readmit_v1") as run:
+    with mlflow.start_run(run_name=f"logreg_readmit_asof_{chosen_as_of}") as run:
         run_id = run.info.run_id
 
         # Train
@@ -153,18 +230,14 @@ def main():
         proba = pipeline.predict_proba(X_test)[:, 1]
         pred = (proba >= 0.5).astype(int)
 
-        ap = average_precision_score(y_test, proba)
-        mlflow.log_metric("pr_auc", ap)
-
-        # Metrics
         acc = accuracy_score(y_test, pred)
         f1 = f1_score(y_test, pred, zero_division=0)
-        try:
+
+        auc = float("nan")
+        ap = float("nan")
+        if y_test.nunique() == 2:
             auc = roc_auc_score(y_test, proba)
             ap = average_precision_score(y_test, proba)
-            mlflow.log_metric("pr_auc", ap)
-        except ValueError:
-            auc = float("nan")
 
         # Confusion matrix artifact
         cm = confusion_matrix(y_test, pred)
@@ -188,19 +261,32 @@ def main():
         mlflow.log_param("test_size", test_size)
         mlflow.log_param("random_seed", seed)
         mlflow.log_param("feature_cols", json.dumps(feature_cols))
+        mlflow.log_param("as_of", chosen_as_of)
+
+        mlflow.log_param("n_rows", len(df))
+        mlflow.log_param("n_pos", int(y.sum()))
+        mlflow.log_param("n_neg", int((y == 0).sum()))
+        mlflow.log_param("test_pos", int(y_test.sum()))
+        mlflow.log_param("test_neg", int((y_test == 0).sum()))
 
         # Log metrics
         mlflow.log_metric("accuracy", acc)
         mlflow.log_metric("f1", f1)
         if auc == auc:  # not NaN
             mlflow.log_metric("roc_auc", auc)
+        if ap == ap:
             mlflow.log_metric("pr_auc", ap)
 
         # Log artifacts
         mlflow.log_artifact(str(fig_path), artifact_path="evaluation")
 
-        input_example = X_train.head(5)
-        signature = infer_signature(X_train, pipeline.predict_proba(X_train)[:, 1])
+        input_example = X_train.head(5).copy()
+        for c in input_example.columns:
+            if str(input_example[c].dtype).startswith("int"):
+                input_example[c] = input_example[c].astype("float64")
+
+        #signature = infer_signature(X_train, pipeline.predict_proba(X_train)[:, 1])
+        signature = infer_signature(input_example, pipeline.predict_proba(input_example)[:, 1])
 
         # Log model to MLflow
         mlflow.sklearn.log_model(
