@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 from dotenv import load_dotenv
 
-from healthml.data.partitions import list_partitions, latest_partition
+from healthml.data.partitions import latest_partition, list_partitions
 from healthml.privacy.date_shift import shift_dates
 from healthml.privacy.masking import mask_patients, pseudonymize_id
 

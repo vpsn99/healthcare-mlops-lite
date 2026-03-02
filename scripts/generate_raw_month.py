@@ -1,9 +1,7 @@
 import argparse
 import shutil
 import subprocess
-import sys
 from pathlib import Path
-
 
 REQUIRED_TABLES = [
     "patients.csv",
