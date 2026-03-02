@@ -25,6 +25,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from healthml.data.partitions import latest_partition
+from healthml.train.promote import maybe_promote
 
 
 def load_config(path: str) -> dict:
@@ -335,6 +336,19 @@ def main():
         print("Saved model (run):", run_model_path)
         print("Saved model (registered):", registered_model_path)
 
+        promoted = maybe_promote(
+            run_id=run_id,
+            mlflow_tracking_uri=f"file:{mlflow_dir.as_posix()}",
+            promote_metric="pr_auc",
+            min_delta=0.0,
+            models_root="models",
+        )
+
+        mlflow.set_tag("promoted_to_registered", str(promoted).lower())
+        if promoted:
+            print(f"PROMOTED: run {run_id} -> models/registered (metric=pr_auc)")
+        else:
+            print(f"NOT PROMOTED: run {run_id} kept in models/runs")
 
 
 
