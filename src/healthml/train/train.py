@@ -222,6 +222,7 @@ def main():
 
     with mlflow.start_run(run_name=f"logreg_readmit_asof_{chosen_as_of}") as run:
         run_id = run.info.run_id
+        run_model_dir = ensure_dir(Path("models") / "runs" / run_id)
 
         # Train
         pipeline.fit(X_train, y_train)
@@ -241,7 +242,9 @@ def main():
 
         # Confusion matrix artifact
         cm = confusion_matrix(y_test, pred)
-        fig_path = model_dir / "confusion_matrix.png"
+
+        # Save into run-specific folder (immutable)
+        fig_path = run_model_dir / "confusion_matrix.png"
         plt.figure()
         plt.imshow(cm)
         plt.title("Confusion Matrix")
@@ -279,6 +282,8 @@ def main():
 
         # Log artifacts
         mlflow.log_artifact(str(fig_path), artifact_path="evaluation")
+        registered_fig_path = model_dir / "confusion_matrix.png"
+        Path(registered_fig_path).write_bytes(Path(fig_path).read_bytes())
 
         input_example = X_train.head(5).copy()
         for c in input_example.columns:
@@ -297,23 +302,40 @@ def main():
         )
 
         # Export model locally for serving
-        model_path = model_dir / "model.joblib"
-        joblib.dump(pipeline, model_path)
+        # Save immutable per-run model
+        run_model_path = run_model_dir / "model.joblib"
+        joblib.dump(pipeline, run_model_path)
 
+        # Update "registered/latest" model
+        registered_model_path = model_dir / "model.joblib"
+        joblib.dump(pipeline, registered_model_path)
+
+        # Metadata (run-specific)
         meta = {
             "run_id": run_id,
             "experiment": project_name,
-            "model_path": str(model_path),
+            "as_of": chosen_as_of,
+            "model_path": str(run_model_path),
+            "registered_model_path": str(registered_model_path),
             "feature_cols": feature_cols,
             "target": target_name,
         }
-        with open(model_dir / "model_metadata.json", "w", encoding="utf-8") as f:
+        with open(run_model_dir / "model_metadata.json", "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
+
+        # Metadata (latest)
+        meta_latest = dict(meta)
+        meta_latest["model_path"] = str(registered_model_path)
+        with open(model_dir / "model_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(meta_latest, f, indent=2)
 
         print("Training complete.")
         print("Run ID:", run_id)
-        print("Saved model:", model_path)
         print("Metrics:", {"accuracy": acc, "f1": f1, "roc_auc": auc})
+        print("Saved model (run):", run_model_path)
+        print("Saved model (registered):", registered_model_path)
+
+
 
 
 if __name__ == "__main__":
